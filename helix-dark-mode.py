@@ -123,7 +123,7 @@ def apply_color_scheme(color_scheme: ColorScheme) -> None:
     theme_file = (theme_directory / theme).with_suffix(".toml")
     if theme_file.exists():
         LOG.info("Re-linking auto.toml to %s", theme_file)
-        auto_tmp = Path(tempfile.mktemp(prefix="auto", dir=theme_directory))
+        auto_tmp = Path(tempfile.mktemp(prefix=".auto", dir=theme_directory))
         LOG.debug("Linking %s to %s", theme_file.name, auto_tmp)
         auto_tmp.symlink_to(theme_file.name)
         LOG.debug("Renaming %s to auto.toml", auto_tmp)
@@ -141,38 +141,29 @@ async def process_color_scheme(
         apply_scheme_pool.submit(apply_color_scheme, color_scheme)
 
 
-class SettingChangedHandler:
-    def __init__(self, current_theme: asyncio.Queue[ColorScheme]):
-        self._current_theme = current_theme
-        self._last_theme: int | None = None
+async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) -> None:
+    # We use an event to wait "forever", so as to keep a reference to the
+    # connection and thus the DBus signal subscription alive.
+    quit_event = asyncio.Event()
 
-    def __call__(
-        self,
-        _connection: Gio.DBusConnection,  # type: ignore
-        _sender: str,
-        _objpath: str,
-        _iface: str,
-        _signal: str,
-        args: GLib.Variant,  # type: ignore
-    ) -> None:
+    # Keep track of the scheme, to prevent updates if the theme didn't change
+    last_color_scheme: int | None = None
+
+    def _handle_setting_changed(_c, _s, _o, _i, _sig, args: GLib.Variant) -> None:  # type: ignore
+        nonlocal last_color_scheme
         args = args.unpack()  # type: ignore
         (iface, key, value) = cast(Tuple[str, str, Any], args)
         LOG.debug("SettingChanged %s %s %s", iface, key, value)
         if iface == "org.freedesktop.appearance" and key == "color-scheme":
             value = cast(int, value)
-            if value != self._last_theme:
-                self._last_theme = value
+            if value != last_color_scheme:
+                last_color_scheme = value
                 scheme = ColorScheme(value)
                 LOG.info("Color scheme changed to %s", scheme)
-                self._current_theme.put_nowait(scheme)
+                color_schemes.put_nowait(scheme)
             else:
                 LOG.info("Color scheme did not change from previous value")
 
-
-async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) -> None:
-    # We use an event to wait "forever", so as to keep a reference to the
-    # connection and thus the DBus signal subscription alive.
-    quit_event = asyncio.Event()
     connection = await Gio.bus_get(Gio.BusType.SESSION)  # type: ignore
     connection.signal_subscribe(  # type: ignore
         "org.freedesktop.portal.Desktop",
@@ -182,8 +173,36 @@ async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) ->
         # Only listen to changes of appearance settings
         "org.freedesktop.appearance",
         Gio.DBusSignalFlags.MATCH_ARG0_NAMESPACE,  # type: ignore
-        SettingChangedHandler(color_schemes),
+        _handle_setting_changed,
     )
+
+    try:
+        # Receive the initial scheme
+        response = await connection.call(  # type: ignore
+            "org.freedesktop.portal.Desktop",
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.Settings",
+            "ReadOne",
+            GLib.Variant("(ss)", ("org.freedesktop.appearance", "color-scheme")),  # type: ignore
+            GLib.VariantType("(v)"),  # type: ignore
+            Gio.DBusCallFlags.NO_AUTO_START,  # type: ignore
+            1000,
+            None,
+        )
+        response = response.unpack()  # type: ignore
+        (value,) = cast(Tuple[Any], response)
+        if not isinstance(value, int):
+            raise ValueError(
+                f"Unexpected value for color-scheme, expected number, but got {value}"
+            )
+        last_color_scheme = value
+        color_schemes.put_nowait(ColorScheme(value))
+    except Exception as error:
+        LOG.error(
+            "Failed to receive current value of color-scheme: %s", error, exc_info=True
+        )
+
+    # Wait forever for an event we never trigger, to effectively keep running forever
     await quit_event.wait()
 
 
