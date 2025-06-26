@@ -4,7 +4,6 @@
 # Licensed under the EUPL 1.2
 
 import asyncio
-from functools import partial
 import logging
 import os
 import tempfile
@@ -13,7 +12,7 @@ from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 from typing import Any, Generator, Tuple, cast
-from concurrent.futures import ThreadPoolExecutor, Executor
+from concurrent.futures import ThreadPoolExecutor
 
 from gi.events import GLibEventLoopPolicy  # type: ignore
 from gi.repository import GLib, Gio  # type: ignore
@@ -135,15 +134,38 @@ def apply_color_scheme(color_scheme: ColorScheme) -> None:
         send_signal_to_matching_processes("helix", signal)
 
 
-async def process_color_scheme(
-    apply_scheme_pool: Executor, color_schemes: asyncio.Queue[ColorScheme]
-) -> None:
+async def process_color_scheme(color_schemes: asyncio.Queue[ColorScheme]) -> None:
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="apply-color-scheme-")
     try:
         while True:
             color_scheme = await color_schemes.get()
-            apply_scheme_pool.submit(apply_color_scheme, color_scheme)
+            pool.submit(apply_color_scheme, color_scheme)
     except asyncio.QueueShutDown:
         LOG.info("Queue for color scheme changes shut down, stopping")
+        pool.shutdown()
+
+
+async def get_current_color_scheme(
+    connection: Gio.DBusConnection,  # type: ignore
+) -> ColorScheme:
+    response = await connection.call(  # type: ignore
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Settings",
+        "ReadOne",
+        GLib.Variant("(ss)", ("org.freedesktop.appearance", "color-scheme")),  # type: ignore
+        GLib.VariantType("(v)"),  # type: ignore
+        Gio.DBusCallFlags.NO_AUTO_START,  # type: ignore
+        1000,
+        None,
+    )
+    response = response.unpack()  # type: ignore
+    (value,) = cast(Tuple[Any], response)
+    if not isinstance(value, int):
+        raise ValueError(
+            f"Unexpected value for color-scheme, expected number, but got {value}"
+        )
+    return ColorScheme(value)
 
 
 async def monitor_changed_settings(
@@ -160,20 +182,19 @@ async def monitor_changed_settings(
     Continue until `quit_event` is triggered.
     """
     # Keep track of the scheme, to prevent updates if the theme didn't change
-    last_color_scheme: int | None = None
+    last_color_scheme: ColorScheme | None = None
 
     def _handle_setting_changed(_c, _s, _o, _i, _sig, args: GLib.Variant) -> None:  # type: ignore
         nonlocal last_color_scheme
         args = args.unpack()  # type: ignore
-        (iface, key, value) = cast(Tuple[str, str, Any], args)
-        LOG.debug("SettingChanged %s %s %s", iface, key, value)
+        (iface, key, color_scheme) = cast(Tuple[str, str, Any], args)
+        LOG.debug("SettingChanged %s %s %s", iface, key, color_scheme)
         if iface == "org.freedesktop.appearance" and key == "color-scheme":
-            value = cast(int, value)
-            if value != last_color_scheme:
-                last_color_scheme = value
-                scheme = ColorScheme(value)
-                LOG.info("Color scheme changed to %s", scheme)
-                color_schemes.put_nowait(scheme)
+            color_scheme = ColorScheme(cast(int, color_scheme))
+            if color_scheme != last_color_scheme:
+                last_color_scheme = color_scheme
+                LOG.info("Color scheme changed to %s", color_scheme)
+                color_schemes.put_nowait(color_scheme)
             else:
                 LOG.info("Color scheme did not change from previous value")
 
@@ -191,49 +212,25 @@ async def monitor_changed_settings(
 
     try:
         # Receive the initial scheme
-        response = await connection.call(  # type: ignore
-            "org.freedesktop.portal.Desktop",
-            "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.Settings",
-            "ReadOne",
-            GLib.Variant("(ss)", ("org.freedesktop.appearance", "color-scheme")),  # type: ignore
-            GLib.VariantType("(v)"),  # type: ignore
-            Gio.DBusCallFlags.NO_AUTO_START,  # type: ignore
-            1000,
-            None,
-        )
-        response = response.unpack()  # type: ignore
-        (value,) = cast(Tuple[Any], response)
-        if not isinstance(value, int):
-            raise ValueError(
-                f"Unexpected value for color-scheme, expected number, but got {value}"
-            )
-        last_color_scheme = value
-        color_schemes.put_nowait(ColorScheme(value))
+        color_scheme = await get_current_color_scheme(connection)  # type: ignore
+        if last_color_scheme is None:
+            # Handle the initial scheme, but only if we didn't see a scheme
+            # change in the mean time
+            last_color_scheme = color_scheme
+            color_schemes.put_nowait(color_scheme)
     except Exception as error:
         LOG.error(
             "Failed to receive current value of color-scheme: %s", error, exc_info=True
         )
 
-    LOG.debug("Waiting until terminate")
-    # Wait forever for an event we never trigger, to effectively keep running forever
+    LOG.debug("Waiting until quitting")
     await quit_event.wait()
-    LOG.debug("Asked to quit, disconnecting signals and closing D-Bus connection")
+    LOG.debug(
+        "Asked to quit, shutting down queue, disconnecting signals and closing D-Bus connection"
+    )
+    color_schemes.shutdown()
     connection.signal_unsubscribe(signal_subscription)  # type: ignore
     await connection.close()  # type: ignore
-
-
-def quit_on_signal(event: asyncio.Event, signal: Signals) -> None:
-    LOG.info("Received %s, quitting", signal.name)
-    event.set()
-
-
-async def close_queue_when_quit(
-    quit_event: asyncio.Event, queue: asyncio.Queue[Any]
-) -> None:
-    await quit_event.wait()
-    LOG.debug("Asked to quit, shutting down queue for color scheme changes")
-    queue.shutdown()
 
 
 def main() -> None:
@@ -245,15 +242,15 @@ def main() -> None:
     loop = cast(asyncio.EventLoop, policy.get_event_loop())
 
     quit_event = asyncio.Event()
-    apply_scheme_pool = ThreadPoolExecutor(
-        max_workers=1, thread_name_prefix="apply-color-scheme-"
-    )
     color_schemes: asyncio.Queue[ColorScheme] = asyncio.Queue()
 
+    def quit_on_signal(signal: Signals) -> None:
+        LOG.info("Received %s, quitting", signal.name)
+        quit_event.set()
+
     for signal in [Signals.SIGTERM, Signals.SIGINT]:
-        loop.add_signal_handler(signal, quit_on_signal, quit_event, signal)
-    loop.create_task(close_queue_when_quit(quit_event, color_schemes))
-    loop.create_task(process_color_scheme(apply_scheme_pool, color_schemes))
+        loop.add_signal_handler(signal, quit_on_signal, signal)
+    loop.create_task(process_color_scheme(color_schemes))
     loop.run_until_complete(monitor_changed_settings(quit_event, color_schemes))
 
 
