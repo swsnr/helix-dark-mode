@@ -5,15 +5,96 @@
 
 import asyncio
 import logging
+import os
+import tempfile
+from signal import Signals, pidfd_send_signal
+from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Tuple, cast
+from pathlib import Path
+from typing import Any, Generator, Tuple, cast
 from concurrent.futures import ThreadPoolExecutor, Executor
 
 from gi.events import GLibEventLoopPolicy  # type: ignore
-from gi.repository import Gio  # type: ignore
+from gi.repository import GLib, Gio  # type: ignore
 
 
-LOG = logging.getLogger("helix-dark-mode")
+LOG: logging.Logger = logging.getLogger("helix-dark-mode")
+
+XDG_CONFIG_HOME: Path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+
+OUR_PID: int = os.getpid()
+
+
+@contextmanager
+def open_directory(name: str, dir_fd: int | None) -> Generator[int]:
+    """Open a directory as file descriptor.
+
+    Return a file descriptor for the directory referred to by `name`.
+
+    `dir_fd` may be a FD referring to the parent directory, in this case `name`
+    must be relative to that parent directory.
+
+    Otherwise `name` may be either relative to the current working directory or
+    absolute.
+    """
+    fd = os.open(name, os.O_DIRECTORY | os.O_RDONLY, dir_fd=dir_fd)
+    yield fd
+    os.close(fd)
+
+
+def is_matching_process(pidfd: int, name: str) -> bool:
+    """Whether a process matches a name.
+
+    Return `True` if the process referred to by the given PID file descriptor,
+    that is, a directory FD to a process directory under `/proc`, matches the
+    given `name`, or `False` otherwise.
+
+    Check `name` against the basename of the process executable, referred to by
+    the `/proc/<PID>/exe` symlink, and against the basename of the first item in
+    the process command line as contained in `/proc/<PID>/cmdline`.
+    """
+    target = os.readlink("exe", dir_fd=pidfd)
+    if os.path.basename(target) == name:
+        return True
+
+    with os.fdopen(os.open("cmdline", os.O_RDONLY, dir_fd=pidfd)) as cmdline:
+        if os.path.basename(cmdline.read().split("\0")[0]) == name:
+            return True
+
+    return False
+
+
+def send_signal_to_matching_processes(name: str, signal: Signals) -> None:
+    """Send a signal to all processes matching a certain name."""
+    with open_directory("/proc", dir_fd=None) as procfd:
+        with os.scandir(procfd) as proc_dentries:
+            for dentry in proc_dentries:
+                if not dentry.name.isdigit():  # Not a PID
+                    continue
+                if dentry.name == str(OUR_PID):  # Our own process
+                    LOG.debug("Skipping %s, our own process", dentry.path)
+                    continue
+                if not dentry.is_dir():  # Not a PID directory
+                    continue
+
+                LOG.debug("Checking process %s", dentry.name)
+                try:
+                    with open_directory(dentry.name, dir_fd=procfd) as pidfd:
+                        if is_matching_process(pidfd, name):
+                            LOG.info(
+                                "%s matches %s, sending signal %s to %s",
+                                dentry.name,
+                                name,
+                                signal,
+                            )
+                            pidfd_send_signal(pidfd, signal)
+                except Exception as error:
+                    if isinstance(error, PermissionError):
+                        # EPERM is frequent in /proc, so let's not log these
+                        continue
+                    LOG.warning(
+                        "Skipping %s, failed: %s", dentry.name, error, exc_info=True
+                    )
 
 
 class ColorScheme(Enum):
@@ -23,9 +104,33 @@ class ColorScheme(Enum):
     PREFER_LIGHT = 2
 
 
+def theme_for_color_scheme(color_scheme: ColorScheme) -> str:
+    match color_scheme:
+        case ColorScheme.NO_PREFERENCE:
+            return "default"
+        case ColorScheme.PREFER_DARK:
+            return "dark"
+        case ColorScheme.PREFER_LIGHT:
+            return "light"
+
+
 def apply_color_scheme(color_scheme: ColorScheme) -> None:
-    # TODO: Apply color scheme and send USR1 all helix processes
-    print("Color scheme changed", color_scheme)
+    theme_directory = XDG_CONFIG_HOME / "helix" / "themes"
+    theme = theme_for_color_scheme(color_scheme)
+    if not (theme_directory / theme).with_suffix(".toml").exists():
+        theme = "default"
+
+    theme_file = (theme_directory / theme).with_suffix(".toml")
+    if theme_file.exists():
+        LOG.info("Re-linking auto.toml to %s", theme_file)
+        auto_tmp = Path(tempfile.mktemp(prefix="auto", dir=theme_directory))
+        LOG.debug("Linking %s to %s", theme_file.name, auto_tmp)
+        auto_tmp.symlink_to(theme_file.name)
+        LOG.debug("Renaming %s to auto.toml", auto_tmp)
+        auto_tmp.rename(theme_directory / "auto.toml")
+
+        LOG.info("Sending SIGUSR1 to all helix processes")
+        send_signal_to_matching_processes("helix", Signals.SIGUSR1)
 
 
 async def process_color_scheme(
@@ -43,12 +148,12 @@ class SettingChangedHandler:
 
     def __call__(
         self,
-        _connection,  # type: ignore
+        _connection: Gio.DBusConnection,  # type: ignore
         _sender: str,
         _objpath: str,
         _iface: str,
         _signal: str,
-        args,  # type: ignore
+        args: GLib.Variant,  # type: ignore
     ) -> None:
         args = args.unpack()  # type: ignore
         (iface, key, value) = cast(Tuple[str, str, Any], args)
@@ -78,8 +183,7 @@ async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) ->
         "org.freedesktop.appearance",
         Gio.DBusSignalFlags.MATCH_ARG0_NAMESPACE,  # type: ignore
         SettingChangedHandler(color_schemes),
-    )  # type: ignore
-    # Run until the handler quits
+    )
     await quit_event.wait()
 
 
