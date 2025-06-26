@@ -4,12 +4,16 @@
 # Licensed under the EUPL 1.2
 
 import asyncio
+import logging
 from enum import Enum
 from typing import Any, Tuple, cast
 from concurrent.futures import ThreadPoolExecutor, Executor
 
 from gi.events import GLibEventLoopPolicy  # type: ignore
 from gi.repository import Gio  # type: ignore
+
+
+LOG = logging.getLogger("helix-dark-mode")
 
 
 class ColorScheme(Enum):
@@ -48,11 +52,16 @@ class SettingChangedHandler:
     ) -> None:
         args = args.unpack()  # type: ignore
         (iface, key, value) = cast(Tuple[str, str, Any], args)
+        LOG.debug("SettingChanged %s %s %s", iface, key, value)
         if iface == "org.freedesktop.appearance" and key == "color-scheme":
             value = cast(int, value)
             if value != self._last_theme:
                 self._last_theme = value
-                self._current_theme.put_nowait(ColorScheme(value))
+                scheme = ColorScheme(value)
+                LOG.info("Color scheme changed to %s", scheme)
+                self._current_theme.put_nowait(scheme)
+            else:
+                LOG.info("Color scheme did not change from previous value")
 
 
 async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) -> None:
@@ -76,6 +85,8 @@ async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) ->
 
 def main() -> None:
     """Monitor the desktop color scheme and update Helix' color theme accordingly."""
+    logging.basicConfig(level=logging.DEBUG)
+
     policy = GLibEventLoopPolicy()
     asyncio.set_event_loop_policy(policy)
     loop = cast(asyncio.EventLoop, policy.get_event_loop())
@@ -93,3 +104,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+    finally:
+        logging.shutdown()
