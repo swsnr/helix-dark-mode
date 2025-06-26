@@ -12,7 +12,6 @@ from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 from typing import Any, Generator, Tuple, cast
-from concurrent.futures import ThreadPoolExecutor
 
 from gi.events import GLibEventLoopPolicy  # type: ignore
 from gi.repository import GLib, Gio  # type: ignore
@@ -135,14 +134,13 @@ def apply_color_scheme(color_scheme: ColorScheme) -> None:
 
 
 async def process_color_scheme(color_schemes: asyncio.Queue[ColorScheme]) -> None:
-    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="apply-color-scheme-")
+    loop = asyncio.get_event_loop()
     try:
         while True:
             color_scheme = await color_schemes.get()
-            pool.submit(apply_color_scheme, color_scheme)
+            loop.run_in_executor(None, apply_color_scheme, color_scheme)
     except asyncio.QueueShutDown:
         LOG.info("Queue for color scheme changes shut down, stopping")
-        pool.shutdown()
 
 
 async def get_current_color_scheme(
