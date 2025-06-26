@@ -4,6 +4,7 @@
 # Licensed under the EUPL 1.2
 
 import asyncio
+from functools import partial
 import logging
 import os
 import tempfile
@@ -84,8 +85,8 @@ def send_signal_to_matching_processes(name: str, signal: Signals) -> None:
                             LOG.info(
                                 "%s matches %s, sending signal %s to %s",
                                 dentry.name,
+                                signal.name,
                                 name,
-                                signal,
                             )
                             pidfd_send_signal(pidfd, signal)
                 except Exception as error:
@@ -129,23 +130,35 @@ def apply_color_scheme(color_scheme: ColorScheme) -> None:
         LOG.debug("Renaming %s to auto.toml", auto_tmp)
         auto_tmp.rename(theme_directory / "auto.toml")
 
-        LOG.info("Sending SIGUSR1 to all helix processes")
-        send_signal_to_matching_processes("helix", Signals.SIGUSR1)
+        signal = Signals.SIGUSR1
+        LOG.info("Sending %s to all helix processes", signal.name)
+        send_signal_to_matching_processes("helix", signal)
 
 
 async def process_color_scheme(
     apply_scheme_pool: Executor, color_schemes: asyncio.Queue[ColorScheme]
 ) -> None:
-    while True:
-        color_scheme = await color_schemes.get()
-        apply_scheme_pool.submit(apply_color_scheme, color_scheme)
+    try:
+        while True:
+            color_scheme = await color_schemes.get()
+            apply_scheme_pool.submit(apply_color_scheme, color_scheme)
+    except asyncio.QueueShutDown:
+        LOG.info("Queue for color scheme changes shut down, stopping")
 
 
-async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) -> None:
-    # We use an event to wait "forever", so as to keep a reference to the
-    # connection and thus the DBus signal subscription alive.
-    quit_event = asyncio.Event()
+async def monitor_changed_settings(
+    quit_event: asyncio.Event, color_schemes: asyncio.Queue[ColorScheme]
+) -> None:
+    """Monitor for color scheme changes.
 
+    Connect to the Settings Desktop Portal via D-Bus, and listen for changes to
+    the `color-scheme` setting in the `org.freedesktop.appearance` interface.
+
+    Whenever the setting changed, put its current value into the `color_schemes`
+    queue, without waiting.
+
+    Continue until `quit_event` is triggered.
+    """
     # Keep track of the scheme, to prevent updates if the theme didn't change
     last_color_scheme: int | None = None
 
@@ -165,7 +178,7 @@ async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) ->
                 LOG.info("Color scheme did not change from previous value")
 
     connection = await Gio.bus_get(Gio.BusType.SESSION)  # type: ignore
-    connection.signal_subscribe(  # type: ignore
+    signal_subscription = connection.signal_subscribe(  # type: ignore
         "org.freedesktop.portal.Desktop",
         "org.freedesktop.portal.Settings",
         "SettingChanged",
@@ -202,8 +215,25 @@ async def monitor_changed_settings(color_schemes: asyncio.Queue[ColorScheme]) ->
             "Failed to receive current value of color-scheme: %s", error, exc_info=True
         )
 
+    LOG.debug("Waiting until terminate")
     # Wait forever for an event we never trigger, to effectively keep running forever
     await quit_event.wait()
+    LOG.debug("Asked to quit, disconnecting signals and closing D-Bus connection")
+    connection.signal_unsubscribe(signal_subscription)  # type: ignore
+    await connection.close()  # type: ignore
+
+
+def quit_on_signal(event: asyncio.Event, signal: Signals) -> None:
+    LOG.info("Received %s, quitting", signal.name)
+    event.set()
+
+
+async def close_queue_when_quit(
+    quit_event: asyncio.Event, queue: asyncio.Queue[Any]
+) -> None:
+    await quit_event.wait()
+    LOG.debug("Asked to quit, shutting down queue for color scheme changes")
+    queue.shutdown()
 
 
 def main() -> None:
@@ -214,18 +244,21 @@ def main() -> None:
     asyncio.set_event_loop_policy(policy)
     loop = cast(asyncio.EventLoop, policy.get_event_loop())
 
+    quit_event = asyncio.Event()
     apply_scheme_pool = ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="apply-color-scheme-"
     )
     color_schemes: asyncio.Queue[ColorScheme] = asyncio.Queue()
+
+    for signal in [Signals.SIGTERM, Signals.SIGINT]:
+        loop.add_signal_handler(signal, quit_on_signal, quit_event, signal)
+    loop.create_task(close_queue_when_quit(quit_event, color_schemes))
     loop.create_task(process_color_scheme(apply_scheme_pool, color_schemes))
-    loop.run_until_complete(monitor_changed_settings(color_schemes))
+    loop.run_until_complete(monitor_changed_settings(quit_event, color_schemes))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except KeyboardInterrupt:
-        pass
     finally:
         logging.shutdown()
