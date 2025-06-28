@@ -1,0 +1,24 @@
+[package]
+name = "helix-dark-mode"
+description = "Dark mode for the Helix editor"
+homepage = "https://codeberg.org/swsnr/helix-dark-mode"
+license = "EUPL-1.2"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.43.0", features = ["rt", "macros", "signal", "process"] }
+tokio-stream = { version = "0.1.17", features = ["sync", "signal"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", default-features = false, features = [
+    "std",
+    "ansi",
+    "registry",
+] }
+logcontrol-tracing = "0.2.0"
+logcontrol-zbus = "3.0.0"
+zbus = { version = "5.7.1", default-features = false, features = ["tokio"] }
+futures = "0.3.20"
+fastrand = "2.3.0"
+rustix = { version = "1.0.7", features = ["fs", "process"] }
+anyhow = "1.0.0"

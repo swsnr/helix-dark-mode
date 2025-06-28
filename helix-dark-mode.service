@@ -13,7 +13,7 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 NoNewPrivileges=yes
 Type=exec
-ExecStart=helix-dark-mode
+ExecStart=/usr/bin/helix-dark-mode
 Restart=on-failure
 
 [Install]
