@@ -493,17 +493,34 @@ async fn main() -> anyhow::Result<()> {
                 }
             })))
         })
-        .try_filter_map(|value| future::ready(Ok(value)));
+        .try_filter_map(|value| future::ready(Ok(value)))
+        .map_ok(|color_scheme| {
+            let span = info_span!("desktop-setting-changed").entered();
+            info!(
+                color_scheme = ?color_scheme,
+                "org.freedesktop.appearance color-scheme changed to {color_scheme:?}"
+            );
+            (span.exit(), color_scheme)
+        });
 
     // Explicitly refresh color scheme initially
-    let initial_color_scheme = stream::once(get_color_scheme(settings.clone()));
+    let initial_color_scheme = stream::once(get_color_scheme(settings.clone()))
+        .map_ok(|color_scheme| (info_span!("initial-refresh"), color_scheme));
 
     // Explicitly refresh color scheme on SIGUSR1
     let explicit_color_scheme_change = SignalStream::new(signal(SignalKind::user_defined1())?)
-        .inspect(|()| info!("Received SIGUSR1"))
-        .then(move |()| {
+        .map(|()| {
+            let span = info_span!("color-scheme-update-requested").entered();
+            info!("Received SIGUSR1");
+            span.exit()
+        })
+        .then(move |span| {
             let settings = settings.clone();
-            async move { get_color_scheme(settings).await }
+            async move {
+                let scheme = get_color_scheme(settings).await?;
+                Ok((Span::current(), scheme))
+            }
+            .instrument(span)
         });
 
     let (color_scheme, abort_handle) = stream::abortable(initial_color_scheme.chain(
@@ -514,17 +531,18 @@ async fn main() -> anyhow::Result<()> {
     let mut color_scheme_task = tokio::spawn(
         color_scheme
             .enumerate()
-            .map(|(n, r)| r.map(|s| (n, s)))
-            .try_for_each(move |(n, color_scheme)| {
+            .map(|(n, r)| r.map(|(span, scheme)| (n, span, scheme)))
+            .try_for_each(move |(n, span, color_scheme)| {
+                let span = info_span!(parent: &span, "color-scheme-update", n = n, color_scheme = ?color_scheme)
+                    .entered();
                 info!(
                     n,
                     ?color_scheme,
                     "Color scheme changed {n}th time, to {color_scheme:?}",
                 );
+                let span = span.exit();
                 let color_scheme_tx = color_scheme_tx.clone();
                 async move {
-                    let span =
-                        info_span!("color-scheme-changed", n = n, color_scheme = ?color_scheme);
                     color_scheme_tx
                         .send((color_scheme, span))
                         .await
