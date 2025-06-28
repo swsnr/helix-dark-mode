@@ -433,6 +433,7 @@ async fn update_helix_theme_for_color_schemes(
 }
 
 #[tokio::main(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let logcontrol = setup_logging();
     let connection = zbus::connection::Builder::session()?
@@ -493,8 +494,21 @@ async fn main() -> anyhow::Result<()> {
             })))
         })
         .try_filter_map(|value| future::ready(Ok(value)));
-    let (color_scheme, abort_handle) =
-        stream::abortable(stream::once(get_color_scheme(settings)).chain(color_scheme_signals));
+
+    // Explicitly refresh color scheme initially
+    let initial_color_scheme = stream::once(get_color_scheme(settings.clone()));
+
+    // Explicitly refresh color scheme on SIGUSR1
+    let explicit_color_scheme_change = SignalStream::new(signal(SignalKind::user_defined1())?)
+        .inspect(|()| info!("Received SIGUSR1"))
+        .then(move |()| {
+            let settings = settings.clone();
+            async move { get_color_scheme(settings).await }
+        });
+
+    let (color_scheme, abort_handle) = stream::abortable(initial_color_scheme.chain(
+        stream::select(color_scheme_signals, explicit_color_scheme_change),
+    ));
 
     info!("Starting to watch for changes to the desktop color scheme");
     let mut color_scheme_task = tokio::spawn(
