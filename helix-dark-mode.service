@@ -12,8 +12,10 @@ Requisite=graphical-session.target
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 NoNewPrivileges=yes
-Type=exec
+Type=dbus
+BusName=de.swsnr.helix-dark-mode
 ExecStart=/usr/bin/helix-dark-mode
+ExecReload=kill -USR1 $MAINPID
 Restart=on-failure
 
 [Install]
