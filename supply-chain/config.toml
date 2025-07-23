@@ -1,0 +1,138 @@
+
+# cargo-vet config file
+
+[cargo-vet]
+version = "0.10"
+
+[imports.bytecode-alliance]
+url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
+
+[imports.embark-studios]
+url = "https://raw.githubusercontent.com/EmbarkStudios/rust-ecosystem/main/audits.toml"
+
+[imports.google]
+url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
+
+[imports.isrg]
+url = "https://raw.githubusercontent.com/divviup/libprio-rs/main/supply-chain/audits.toml"
+
+[imports.mozilla]
+url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
+
+[imports.swsnr]
+url = "https://codeberg.org/swsnr/rust-supply-chain/raw/branch/main/audits.toml"
+
+[policy.helix-dark-mode]
+criteria = "safe-to-run"
+
+[[exemptions.addr2line]]
+version = "0.24.2"
+criteria = "safe-to-run"
+
+[[exemptions.adler2]]
+version = "2.0.1"
+criteria = "safe-to-run"
+
+[[exemptions.async-lock]]
+version = "3.4.0"
+criteria = "safe-to-run"
+
+[[exemptions.async-recursion]]
+version = "1.1.1"
+criteria = "safe-to-run"
+
+[[exemptions.async-task]]
+version = "4.7.1"
+criteria = "safe-to-run"
+
+[[exemptions.enumflags2]]
+version = "0.7.12"
+criteria = "safe-to-run"
+
+[[exemptions.enumflags2_derive]]
+version = "0.7.12"
+criteria = "safe-to-run"
+
+[[exemptions.futures-lite]]
+version = "2.6.0"
+criteria = "safe-to-run"
+
+[[exemptions.hermit-abi]]
+version = "0.5.2"
+criteria = "safe-to-run"
+
+[[exemptions.io-uring]]
+version = "0.7.9"
+criteria = "safe-to-run"
+
+[[exemptions.mio]]
+version = "1.0.4"
+criteria = "safe-to-run"
+
+[[exemptions.nix]]
+version = "0.30.1"
+criteria = "safe-to-run"
+
+[[exemptions.object]]
+version = "0.36.7"
+criteria = "safe-to-run"
+
+[[exemptions.ordered-stream]]
+version = "0.2.0"
+criteria = "safe-to-run"
+
+[[exemptions.piper]]
+version = "0.2.4"
+criteria = "safe-to-run"
+
+[[exemptions.r-efi]]
+version = "5.3.0"
+criteria = "safe-to-run"
+
+[[exemptions.rustc-demangle]]
+version = "0.1.25"
+criteria = "safe-to-run"
+
+[[exemptions.sharded-slab]]
+version = "0.1.7"
+criteria = "safe-to-run"
+
+[[exemptions.socket2]]
+version = "0.5.10"
+criteria = "safe-to-run"
+
+[[exemptions.tokio]]
+version = "1.46.1"
+criteria = "safe-to-run"
+
+[[exemptions.tracing]]
+version = "0.1.41"
+criteria = "safe-to-run"
+
+[[exemptions.tracing-attributes]]
+version = "0.1.30"
+criteria = "safe-to-run"
+
+[[exemptions.tracing-core]]
+version = "0.1.34"
+criteria = "safe-to-run"
+
+[[exemptions.tracing-journald]]
+version = "0.3.1"
+criteria = "safe-to-run"
+
+[[exemptions.tracing-subscriber]]
+version = "0.3.19"
+criteria = "safe-to-run"
+
+[[exemptions.uds_windows]]
+version = "1.1.0"
+criteria = "safe-to-run"
+
+[[exemptions.winapi-i686-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-run"
+
+[[exemptions.winapi-x86_64-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-run"

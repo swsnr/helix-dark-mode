@@ -1,0 +1,340 @@
+
+# cargo-vet audits file
+
+[audits]
+
+[[trusted.anyhow]]
+criteria = "safe-to-run"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-10-05"
+end = "2026-07-23"
+
+[[trusted.async-broadcast]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2021-05-07"
+end = "2026-07-23"
+
+[[trusted.async-executor]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-04-24"
+end = "2026-07-23"
+
+[[trusted.async-io]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-04-16"
+end = "2026-07-23"
+
+[[trusted.async-lock]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-04-16"
+end = "2026-07-23"
+
+[[trusted.async-process]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-04-24"
+end = "2026-07-23"
+
+[[trusted.async-signal]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2023-09-28"
+end = "2026-07-23"
+
+[[trusted.async-task]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2022-01-26"
+end = "2026-07-23"
+
+[[trusted.async-trait]]
+criteria = "safe-to-run"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-07-23"
+end = "2026-07-23"
+
+[[trusted.atomic-waker]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2023-01-15"
+end = "2026-07-23"
+
+[[trusted.backtrace]]
+criteria = "safe-to-run"
+user-id = 55123 # rust-lang-owner
+start = "2025-05-06"
+end = "2026-07-23"
+
+[[trusted.blocking]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-11-10"
+end = "2026-07-23"
+
+[[trusted.concurrent-queue]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2022-07-17"
+end = "2026-07-23"
+
+[[trusted.endi]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2023-12-10"
+end = "2026-07-23"
+
+[[trusted.errno]]
+criteria = "safe-to-run"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2023-08-29"
+end = "2026-07-23"
+
+[[trusted.event-listener]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2024-02-05"
+end = "2026-07-23"
+
+[[trusted.event-listener-strategy]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2025-03-27"
+end = "2026-07-23"
+
+[[trusted.futures-lite]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-06-03"
+end = "2026-07-23"
+
+[[trusted.libc]]
+criteria = "safe-to-run"
+user-id = 55123 # rust-lang-owner
+start = "2024-08-15"
+end = "2026-07-23"
+
+[[trusted.linux-raw-sys]]
+criteria = "safe-to-run"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2021-06-12"
+end = "2026-07-23"
+
+[[trusted.logcontrol]]
+criteria = "safe-to-run"
+user-id = 4372 # Sebastian Wiesner (swsnr)
+start = "2023-09-30"
+end = "2026-07-23"
+
+[[trusted.logcontrol-tracing]]
+criteria = "safe-to-run"
+user-id = 4372 # Sebastian Wiesner (swsnr)
+start = "2023-09-30"
+end = "2026-07-23"
+
+[[trusted.logcontrol-zbus]]
+criteria = "safe-to-run"
+user-id = 4372 # Sebastian Wiesner (swsnr)
+start = "2023-09-30"
+end = "2026-07-23"
+
+[[trusted.ordered-stream]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2023-01-02"
+end = "2026-07-23"
+
+[[trusted.polling]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2021-03-20"
+end = "2026-07-23"
+
+[[trusted.regex-automata]]
+criteria = "safe-to-run"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-25"
+end = "2026-07-23"
+
+[[trusted.regex-syntax]]
+criteria = "safe-to-run"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-30"
+end = "2026-07-23"
+
+[[trusted.rustc-demangle]]
+criteria = "safe-to-run"
+user-id = 55123 # rust-lang-owner
+start = "2023-03-23"
+end = "2026-07-23"
+
+[[trusted.rustix]]
+criteria = "safe-to-run"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2021-10-29"
+end = "2026-07-23"
+
+[[trusted.serde_repr]]
+criteria = "safe-to-run"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-04-26"
+end = "2026-07-23"
+
+[[trusted.syn]]
+criteria = "safe-to-run"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2026-07-23"
+
+[[trusted.thread_local]]
+criteria = "safe-to-run"
+user-id = 2915 # Amanieu d'Antras (Amanieu)
+start = "2019-09-07"
+end = "2026-07-23"
+
+[[trusted.tokio]]
+criteria = "safe-to-run"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-12-25"
+end = "2026-07-23"
+
+[[trusted.tokio-macros]]
+criteria = "safe-to-run"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-10-26"
+end = "2026-07-23"
+
+[[trusted.tokio-stream]]
+criteria = "safe-to-run"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-01-04"
+end = "2026-07-23"
+
+[[trusted.tokio-util]]
+criteria = "safe-to-run"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-01-12"
+end = "2026-07-23"
+
+[[trusted.toml_edit]]
+criteria = "safe-to-run"
+user-id = 6743 # Ed Page (epage)
+start = "2021-09-13"
+end = "2026-07-23"
+
+[[trusted.valuable]]
+criteria = "safe-to-run"
+user-id = 33035 # Taiki Endo (taiki-e)
+start = "2025-01-17"
+end = "2026-07-23"
+
+[[trusted.wasi]]
+criteria = "safe-to-run"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2020-06-03"
+end = "2026-07-23"
+
+[[trusted.windows-sys]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-11-15"
+end = "2026-07-23"
+
+[[trusted.windows-targets]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2022-09-09"
+end = "2026-07-23"
+
+[[trusted.windows_aarch64_gnullvm]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2022-09-01"
+end = "2026-07-23"
+
+[[trusted.windows_aarch64_msvc]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-11-05"
+end = "2026-07-23"
+
+[[trusted.windows_i686_gnu]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-10-28"
+end = "2026-07-23"
+
+[[trusted.windows_i686_gnullvm]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2024-04-02"
+end = "2026-07-23"
+
+[[trusted.windows_i686_msvc]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-10-27"
+end = "2026-07-23"
+
+[[trusted.windows_x86_64_gnu]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-10-28"
+end = "2026-07-23"
+
+[[trusted.windows_x86_64_gnullvm]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2022-09-01"
+end = "2026-07-23"
+
+[[trusted.windows_x86_64_msvc]]
+criteria = "safe-to-run"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-10-27"
+end = "2026-07-23"
+
+[[trusted.winnow]]
+criteria = "safe-to-run"
+user-id = 6743 # Ed Page (epage)
+start = "2023-02-22"
+end = "2026-07-23"
+
+[[trusted.zbus]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2020-07-19"
+end = "2026-07-23"
+
+[[trusted.zbus_macros]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2020-07-19"
+end = "2026-07-23"
+
+[[trusted.zbus_names]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2021-07-30"
+end = "2026-07-23"
+
+[[trusted.zvariant]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2019-12-30"
+end = "2026-07-23"
+
+[[trusted.zvariant_derive]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2020-05-22"
+end = "2026-07-23"
+
+[[trusted.zvariant_utils]]
+criteria = "safe-to-run"
+user-id = 6423 # Zeeshan Ali Khan (zeenix)
+start = "2023-03-07"
+end = "2026-07-23"
