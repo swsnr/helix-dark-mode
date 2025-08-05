@@ -149,13 +149,13 @@ fn setup_logging() -> impl LogControl1 {
 /// Read the `color-scheme` setting from `settings`, and deserialize the return
 /// value.
 #[instrument(skip(settings))]
-async fn get_color_scheme(settings: SettingsProxy<'_>) -> anyhow::Result<ColorScheme> {
+async fn get_color_scheme(settings: SettingsProxy<'_>) -> zbus::fdo::Result<ColorScheme> {
     info!("Requesting current color scheme from Desktop Settings Portal");
     let response = settings
         .read_one("org.freedesktop.appearance", "color-scheme")
-        .await
-        .with_context(|| "Failed to get color-scheme".to_string())?;
-    ColorScheme::try_from(&*response).with_context(|| format!("Invalid color scheme: {response:?}"))
+        .await?;
+    ColorScheme::try_from(&*response)
+        .map_err(|error| zbus::fdo::Error::ZBus(zbus::Error::Variant(error)))
 }
 
 /// Whether a process matches a name.
@@ -505,6 +505,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Explicitly refresh color scheme initially
     let initial_color_scheme = stream::once(get_color_scheme(settings.clone()))
+        .filter(|result| match result {
+            Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
+                warn!("xdg-portal-service not available");
+                future::ready(false)
+            }
+            _ => future::ready(true),
+        })
+        .map(|result| result.with_context(|| "Failed to get color-scheme"))
         .map_ok(|color_scheme| (info_span!("initial-refresh"), color_scheme));
 
     // Explicitly refresh color scheme on SIGUSR1
