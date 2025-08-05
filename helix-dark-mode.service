@@ -1,8 +1,5 @@
 [Unit]
 Description=Helix Dark Mode daemon
-# Start after XDG desktop portal and fail if the portal doesn't start.
-After=xdg-desktop-portal.service
-Requires=xdg-desktop-portal.service
 
 [Service]
 LockPersonality=yes
