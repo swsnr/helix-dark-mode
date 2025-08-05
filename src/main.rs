@@ -515,14 +515,28 @@ async fn main() -> anyhow::Result<()> {
         .map(|result| result.with_context(|| "Failed to get color-scheme"))
         .map_ok(|color_scheme| (info_span!("initial-refresh"), color_scheme));
 
+    // Request the color scheme if the service name owner changed
+    let portal_service_changed = settings
+        .inner()
+        .receive_owner_changed()
+        .await?
+        .filter_map(future::ready)
+        .map(|name| {
+            let span = info_span!("portal-service-changed").entered();
+            info!("XDG Portal Service changed: {name}");
+            span.exit()
+        });
+
     // Explicitly refresh color scheme on SIGUSR1
-    let explicit_color_scheme_change = SignalStream::new(signal(SignalKind::user_defined1())?)
-        .map(|()| {
+    let explicit_color_scheme_change =
+        SignalStream::new(signal(SignalKind::user_defined1())?).map(|()| {
             let span = info_span!("color-scheme-update-requested").entered();
             info!("Received SIGUSR1");
             span.exit()
-        })
-        .then(move |span| {
+        });
+
+    let requested_color_scheme =
+        stream::select(portal_service_changed, explicit_color_scheme_change).then(move |span| {
             let settings = settings.clone();
             async move {
                 let scheme = get_color_scheme(settings).await?;
@@ -531,9 +545,9 @@ async fn main() -> anyhow::Result<()> {
             .instrument(span)
         });
 
-    let (color_scheme, abort_handle) = stream::abortable(initial_color_scheme.chain(
-        stream::select(color_scheme_signals, explicit_color_scheme_change),
-    ));
+    let (color_scheme, abort_handle) = stream::abortable(
+        initial_color_scheme.chain(stream::select(color_scheme_signals, requested_color_scheme)),
+    );
 
     info!("Starting to watch for changes to the desktop color scheme");
     let mut color_scheme_task = tokio::spawn(
