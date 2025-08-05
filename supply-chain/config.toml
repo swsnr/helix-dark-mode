@@ -29,10 +29,6 @@ criteria = "safe-to-run"
 version = "0.24.2"
 criteria = "safe-to-run"
 
-[[exemptions.adler2]]
-version = "2.0.1"
-criteria = "safe-to-run"
-
 [[exemptions.async-lock]]
 version = "3.4.0"
 criteria = "safe-to-run"
@@ -93,20 +89,12 @@ criteria = "safe-to-run"
 version = "0.1.25"
 criteria = "safe-to-run"
 
-[[exemptions.sharded-slab]]
-version = "0.1.7"
-criteria = "safe-to-run"
-
 [[exemptions.socket2]]
 version = "0.5.10"
 criteria = "safe-to-run"
 
 [[exemptions.tokio]]
 version = "1.46.1"
-criteria = "safe-to-run"
-
-[[exemptions.tracing]]
-version = "0.1.41"
 criteria = "safe-to-run"
 
 [[exemptions.tracing-attributes]]
@@ -119,10 +107,6 @@ criteria = "safe-to-run"
 
 [[exemptions.tracing-journald]]
 version = "0.3.1"
-criteria = "safe-to-run"
-
-[[exemptions.tracing-subscriber]]
-version = "0.3.19"
 criteria = "safe-to-run"
 
 [[exemptions.uds_windows]]
