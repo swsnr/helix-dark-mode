@@ -175,9 +175,9 @@ fn process_matches_name(pid_fd: BorrowedFd, name: &str) -> anyhow::Result<bool> 
         .with_context(|| "Failed to read exe symlink target")?;
     if let Some(exe_filename) = Path::new(OsStr::from_bytes(exe_target.as_bytes()))
         .file_name()
-        .map(|s| s.to_string_lossy())
+        .map(OsStrExt::as_bytes)
     {
-        if exe_filename == name {
+        if exe_filename == name.as_bytes() {
             return Ok(true);
         }
     }
@@ -197,8 +197,8 @@ fn process_matches_name(pid_fd: BorrowedFd, name: &str) -> anyhow::Result<bool> 
         .with_context(|| "Failed to read from cmdline")?;
 
     if let Some(argv0) = cmdline.split('\0').next() {
-        if let Some(argv0_filename) = Path::new(argv0).file_name().map(|s| s.to_string_lossy()) {
-            if argv0_filename == name {
+        if let Some(argv0_filename) = Path::new(argv0).file_name().map(OsStrExt::as_bytes) {
+            if argv0_filename == name.as_bytes() {
                 return Ok(true);
             }
         }
