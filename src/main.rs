@@ -438,6 +438,8 @@ async fn main() -> anyhow::Result<()> {
     let logcontrol = setup_logging();
     let connection = zbus::connection::Builder::session()?
         .serve_log_control(logcontrol_zbus::LogControl1::new(logcontrol))?
+        .replace_existing_names(false)
+        .allow_name_replacements(false)
         .name("de.swsnr.helix-dark-mode")?
         .build()
         .await?;
