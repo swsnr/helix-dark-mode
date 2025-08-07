@@ -173,13 +173,12 @@ async fn get_color_scheme(settings: SettingsProxy<'_>) -> zbus::fdo::Result<Colo
 fn process_matches_name(pid_fd: BorrowedFd, name: &str) -> anyhow::Result<bool> {
     let exe_target = readlinkat(pid_fd, "exe", Vec::new())
         .with_context(|| "Failed to read exe symlink target")?;
-    if let Some(exe_filename) = Path::new(OsStr::from_bytes(exe_target.as_bytes()))
+    if Path::new(OsStr::from_bytes(exe_target.as_bytes()))
         .file_name()
         .map(OsStrExt::as_bytes)
+        .is_some_and(|n| n == name.as_bytes())
     {
-        if exe_filename == name.as_bytes() {
-            return Ok(true);
-        }
+        return Ok(true);
     }
 
     let mut cmdline = String::new();
@@ -196,15 +195,13 @@ fn process_matches_name(pid_fd: BorrowedFd, name: &str) -> anyhow::Result<bool> 
         .read_to_string(&mut cmdline)
         .with_context(|| "Failed to read from cmdline")?;
 
-    if let Some(argv0) = cmdline.split('\0').next() {
-        if let Some(argv0_filename) = Path::new(argv0).file_name().map(OsStrExt::as_bytes) {
-            if argv0_filename == name.as_bytes() {
-                return Ok(true);
-            }
-        }
-    }
-
-    Ok(false)
+    Ok(cmdline
+        .split('\0')
+        .next()
+        .map(Path::new)
+        .and_then(|p| p.file_name())
+        .map(OsStrExt::as_bytes)
+        .is_some_and(|n| n == name.as_bytes()))
 }
 
 /// Send a signal to a matching process.
@@ -250,10 +247,10 @@ fn send_signal_to_matching_process(
         }
         Err(error) => {
             // Do not log certain expected errors
-            if let Some(inner) = error.downcast_ref::<Errno>() {
-                if let ErrorKind::PermissionDenied | ErrorKind::NotFound = inner.kind() {
-                    return Ok(());
-                }
+            if error.downcast_ref::<Errno>().is_some_and(|e| {
+                matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::NotFound)
+            }) {
+                return Ok(());
             }
             Err(error.context(format!("Failed to check name of {:?}", dentry.file_name())))
         }
