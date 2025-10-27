@@ -125,19 +125,19 @@ end = "2026-07-23"
 
 [[trusted.logcontrol]]
 criteria = "safe-to-run"
-user-id = 4372 # Sebastian Wiesner (swsnr)
+user-id = 4372 # swsnr
 start = "2023-09-30"
 end = "2026-07-23"
 
 [[trusted.logcontrol-tracing]]
 criteria = "safe-to-run"
-user-id = 4372 # Sebastian Wiesner (swsnr)
+user-id = 4372 # swsnr
 start = "2023-09-30"
 end = "2026-07-23"
 
 [[trusted.logcontrol-zbus]]
 criteria = "safe-to-run"
-user-id = 4372 # Sebastian Wiesner (swsnr)
+user-id = 4372 # swsnr
 start = "2023-09-30"
 end = "2026-07-23"
 
