@@ -40,7 +40,7 @@ use std::os::{fd::BorrowedFd, unix::fs::symlink};
 use std::path::Path;
 
 use anyhow::Context;
-use futures::{StreamExt as _, TryStreamExt, future, stream};
+use futures::{Stream, StreamExt as _, TryStreamExt, future, stream};
 use logcontrol_tracing::{PrettyLogControl1LayerFactory, TracingLogControl1};
 use logcontrol_zbus::{ConnectionBuilderExt as _, logcontrol::LogControl1};
 use rustix::fs::{DirEntry, readlinkat};
@@ -429,36 +429,19 @@ async fn update_helix_theme_for_color_schemes(
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-#[allow(clippy::too_many_lines)]
-async fn main() -> anyhow::Result<()> {
-    let logcontrol = setup_logging();
-    let connection = zbus::connection::Builder::session()?
-        .serve_log_control(logcontrol_zbus::LogControl1::new(logcontrol))?
-        .replace_existing_names(false)
-        .allow_name_replacements(false)
-        .name("de.swsnr.helix-dark-mode")?
-        .build()
-        .await?;
-
-    info!("Connected to bus");
-    let settings = SettingsProxy::builder(&connection)
-        .cache_properties(proxy::CacheProperties::No)
-        .build()
-        .await?;
-
-    // Establish communication channels between different tasks
-    let (color_scheme_tx, color_scheme_rx) = mpsc::channel(5);
-    let (reload_helix_tx, reload_helix_rx) = watch::channel(Span::current());
-
-    // Spawn auxilliary tasks to update the helix theme and reload helix processes
-    info!("Starting to update the helix theme according to the current color scheme");
-    let mut update_theme_task = tokio::spawn(update_helix_theme_for_color_schemes(
-        color_scheme_rx,
-        reload_helix_tx,
-    ));
-    let mut reload_helix_task = tokio::spawn(reload_helix(reload_helix_rx));
-
+/// Receive color scheme changes.
+///
+/// Request the current color scheme immediately, and then receive setting
+/// changed signals for the color scheme setting.
+///
+/// Also, explicitly request the current color scheme when SIGUSR1 is received,
+/// or if the name owner of the XDG Desktop Portal service changes.
+///
+/// Return a stream which yields the color scheme and a tracing span to use for
+/// logging actions in response to the new color scheme.
+async fn receive_color_scheme_changes(
+    settings: SettingsProxy<'_>,
+) -> anyhow::Result<impl Stream<Item = anyhow::Result<(Span, ColorScheme)>>> {
     // Start listening for color scheme changes
     let color_scheme_signals = settings
         .receive_setting_changed_with_args(&[
@@ -544,9 +527,40 @@ async fn main() -> anyhow::Result<()> {
             .instrument(span)
         });
 
-    let (color_scheme, abort_handle) = stream::abortable(
-        initial_color_scheme.chain(stream::select(color_scheme_signals, requested_color_scheme)),
-    );
+    Ok(initial_color_scheme.chain(stream::select(color_scheme_signals, requested_color_scheme)))
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
+    let logcontrol = setup_logging();
+    let connection = zbus::connection::Builder::session()?
+        .serve_log_control(logcontrol_zbus::LogControl1::new(logcontrol))?
+        .replace_existing_names(false)
+        .allow_name_replacements(false)
+        .name("de.swsnr.helix-dark-mode")?
+        .build()
+        .await?;
+
+    info!("Connected to bus");
+    let settings = SettingsProxy::builder(&connection)
+        .cache_properties(proxy::CacheProperties::No)
+        .build()
+        .await?;
+
+    // Establish communication channels between different tasks
+    let (color_scheme_tx, color_scheme_rx) = mpsc::channel(5);
+    let (reload_helix_tx, reload_helix_rx) = watch::channel(Span::current());
+
+    // Spawn auxilliary tasks to update the helix theme and reload helix processes
+    info!("Starting to update the helix theme according to the current color scheme");
+    let mut update_theme_task = tokio::spawn(update_helix_theme_for_color_schemes(
+        color_scheme_rx,
+        reload_helix_tx,
+    ));
+    let mut reload_helix_task = tokio::spawn(reload_helix(reload_helix_rx));
+
+    let (color_scheme, abort_handle) =
+        stream::abortable(receive_color_scheme_changes(settings).await?);
 
     info!("Starting to watch for changes to the desktop color scheme");
     let mut color_scheme_task = tokio::spawn(
