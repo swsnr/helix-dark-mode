@@ -33,7 +33,7 @@
 
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{ErrorKind, Read};
+use std::io::{BufReader, ErrorKind, Read};
 use std::os::fd::AsFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::{fd::BorrowedFd, unix::fs::symlink};
@@ -181,8 +181,7 @@ fn process_matches_name(pid_fd: BorrowedFd, name: &str) -> anyhow::Result<bool> 
         return Ok(true);
     }
 
-    let mut cmdline = String::new();
-    let mut source = File::from(
+    let cmdline_name = BufReader::new(File::from(
         openat(
             pid_fd,
             "cmdline",
@@ -190,16 +189,14 @@ fn process_matches_name(pid_fd: BorrowedFd, name: &str) -> anyhow::Result<bool> 
             Mode::empty(),
         )
         .with_context(|| "Failed to open cmdline")?,
-    );
-    source
-        .read_to_string(&mut cmdline)
-        .with_context(|| "Failed to read from cmdline")?;
+    ))
+    .bytes()
+    .take_while(|b| b.as_ref().is_ok_and(|b| *b != 0))
+    .collect::<std::io::Result<Vec<_>>>()
+    .with_context(|| "Failed to read from cmdline")?;
 
-    Ok(cmdline
-        .split('\0')
-        .next()
-        .map(Path::new)
-        .and_then(|p| p.file_name())
+    Ok(Path::new(OsStr::from_bytes(&cmdline_name))
+        .file_name()
         .map(OsStrExt::as_bytes)
         .is_some_and(|n| n == name.as_bytes()))
 }
