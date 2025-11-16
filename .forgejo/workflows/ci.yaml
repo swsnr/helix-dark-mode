@@ -8,5 +8,6 @@ jobs:
   test-all:
     runs-on: swsnr-rust
     steps:
+      - run: rustup update
       - uses: actions/checkout@v5
       - run: just test-all
