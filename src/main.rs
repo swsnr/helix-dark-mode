@@ -39,7 +39,10 @@ use std::os::{fd::BorrowedFd, unix::fs::symlink};
 use std::path::Path;
 
 use anyhow::Context;
-use futures::{Stream, StreamExt as _, TryStreamExt, future, stream};
+use async_channel::{Receiver, Sender};
+use async_executor::LocalExecutor;
+use async_signal::Signals;
+use futures_lite::{Stream, StreamExt as _, stream};
 use logcontrol_tracing::{PrettyLogControl1LayerFactory, TracingLogControl1};
 use logcontrol_zbus::{ConnectionBuilderExt as _, logcontrol::LogControl1};
 use rustix::fs::{DirEntry, readlinkat};
@@ -50,11 +53,6 @@ use rustix::{
     path::Arg,
     process::{Signal, getpid},
 };
-use tokio::{
-    signal::unix::{SignalKind, signal},
-    sync::{mpsc, watch},
-};
-use tokio_stream::wrappers::SignalStream;
 use tracing::{Instrument, Level, Span, debug, error, info, info_span, instrument, warn};
 use tracing_subscriber::{Registry, layer::SubscriberExt as _};
 use zbus::{
@@ -302,27 +300,23 @@ fn send_signal_to_matching_processes(name: &str, signal: Signal) -> anyhow::Resu
 
 /// Reload helix whenever asked to.
 ///
-/// Whenever `reload_rx` changes, send `SIGUSR1` to all processes named `helix`,
-/// to ask helix to reload its configuration.
-async fn reload_helix(mut reload_rx: watch::Receiver<tracing::Span>) {
-    while reload_rx.changed().await.is_ok() {
-        let span = reload_rx.borrow_and_update().clone();
+/// Whenever `reload_rx` receives a new value, send `SIGUSR1` to all processes
+/// named `helix`, to ask helix to reload its configuration.
+async fn reload_helix(reload_rx: Receiver<tracing::Span>) {
+    while let Ok(span) = reload_rx.recv().await {
         let _guard = span.enter();
         let span = Span::current();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = blocking::unblock(move || {
             span.in_scope(|| send_signal_to_matching_processes("helix", Signal::USR1))
         })
         .in_current_span()
         .await;
         match result {
-            Ok(Ok(())) => {
+            Ok(()) => {
                 info!("Successfully reloaded all Helix processes");
             }
-            Ok(Err(error)) => {
+            Err(error) => {
                 error!("Failed to reload helix processes: {error:#}");
-            }
-            Err(panic) => {
-                error!("Panic occurred while reloading helix processes: {panic:#}");
             }
         }
     }
@@ -398,28 +392,24 @@ fn update_helix_theme(color_scheme: ColorScheme) -> anyhow::Result<()> {
 ///
 /// Return once the `color_scheme` channel is closed.
 async fn update_helix_theme_for_color_schemes(
-    mut color_scheme_rx: mpsc::Receiver<(ColorScheme, tracing::Span)>,
-    reload_helix_tx: watch::Sender<tracing::Span>,
+    color_scheme_rx: Receiver<(ColorScheme, tracing::Span)>,
+    reload_helix_tx: Sender<tracing::Span>,
 ) {
-    while let Some((color_scheme, span)) = color_scheme_rx.recv().await {
+    while let Ok((color_scheme, span)) = color_scheme_rx.recv().await {
         let _guard = span.enter();
         let span = Span::current();
-        let result =
-            tokio::task::spawn_blocking(move || span.in_scope(|| update_helix_theme(color_scheme)))
-                .in_current_span()
-                .await;
+        let result = blocking::unblock(move || span.in_scope(|| update_helix_theme(color_scheme)))
+            .in_current_span()
+            .await;
         match result {
-            Ok(Ok(())) => {
+            Ok(()) => {
                 info!("Triggering reload of all helix processs");
-                if reload_helix_tx.send(Span::current()).is_err() {
-                    warn!("No longer reloading helix processes, watch unexpectedly closed");
+                if reload_helix_tx.force_send(Span::current()).is_err() {
+                    warn!("No longer reloading helix processes, receiver unexpectedly closed");
                 }
             }
-            Ok(Err(error)) => {
+            Err(error) => {
                 error!("Failed to update the helix theme: {error:#}");
-            }
-            Err(panic) => {
-                error!("Panic occurred while updating the helix theme: {panic:#}");
             }
         }
     }
@@ -456,65 +446,73 @@ async fn receive_color_scheme_changes(
                 })
                 .transpose()
         })
-        .filter_map(|value| future::ready(value.transpose()))
+        .filter_map(Result::transpose)
         // For some reason the Gnome XDG settings portal emits this signal
         // twice for every dark mode switch, so we filter out duplicates.
         // We can probably do this in a more elegant way than this scan/filter_map
         // combination, but this works, so why bother.
         .scan(None, |state, value| {
-            future::ready(Some(value.map(|value| {
+            Some(value.map(|value| {
                 if Some(value) == state.take() {
                     None
                 } else {
                     *state = Some(value);
                     Some(value)
                 }
-            })))
+            }))
         })
-        .try_filter_map(|value| future::ready(Ok(value)))
-        .map_ok(|color_scheme| {
-            let span = info_span!("desktop-setting-changed").entered();
-            info!(
-                color_scheme = ?color_scheme,
-                "org.freedesktop.appearance color-scheme changed to {color_scheme:?}"
-            );
-            (span.exit(), color_scheme)
+        .filter_map(|value| {
+            value.transpose().map(|res| {
+                res.map(|color_scheme| {
+                    let span = info_span!("desktop-setting-changed").entered();
+                    info!(
+                        color_scheme = ?color_scheme,
+                        "org.freedesktop.appearance color-scheme changed to {color_scheme:?}"
+                    );
+                    (span.exit(), color_scheme)
+                })
+            })
         });
 
     // Explicitly refresh color scheme initially
-    let initial_color_scheme = stream::once(get_color_scheme(settings.clone()))
+    let initial_color_scheme = stream::once_future(get_color_scheme(settings.clone()))
         .filter(|result| match result {
             Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
                 warn!("xdg-portal-service not available");
-                future::ready(false)
+                false
             }
-            _ => future::ready(true),
+            _ => true,
         })
-        .map(|result| result.with_context(|| "Failed to get color-scheme"))
-        .map_ok(|color_scheme| (info_span!("initial-refresh"), color_scheme));
+        .map(|result| {
+            result
+                .with_context(|| "Failed to get color-scheme")
+                .map(|color_scheme| (info_span!("initial-refresh"), color_scheme))
+        });
 
     // Request the color scheme if the service name owner changed
     let portal_service_changed = settings
         .inner()
         .receive_owner_changed()
         .await?
-        .filter_map(future::ready)
-        .map(|name| {
-            let span = info_span!("portal-service-changed").entered();
-            info!("XDG Portal Service changed: {name}");
-            span.exit()
+        .filter_map(|v| {
+            v.map(|name| {
+                let span = info_span!("portal-service-changed").entered();
+                info!("XDG Portal Service changed: {name}");
+                span.exit()
+            })
         });
 
     // Explicitly refresh color scheme on SIGUSR1
-    let explicit_color_scheme_change =
-        SignalStream::new(signal(SignalKind::user_defined1())?).map(|()| {
+    let explicit_color_scheme_change = Signals::new([async_signal::Signal::Usr1])?
+        .filter_map(Result::ok)
+        .map(|_| {
             let span = info_span!("color-scheme-update-requested").entered();
             info!("Received SIGUSR1");
             span.exit()
         });
 
-    let requested_color_scheme =
-        stream::select(portal_service_changed, explicit_color_scheme_change).then(move |span| {
+    let requested_color_scheme = stream::race(portal_service_changed, explicit_color_scheme_change)
+        .then(move |span| {
             let settings = settings.clone();
             async move {
                 let scheme = get_color_scheme(settings).await?;
@@ -523,95 +521,106 @@ async fn receive_color_scheme_changes(
             .instrument(span)
         });
 
-    Ok(initial_color_scheme.chain(stream::select(color_scheme_signals, requested_color_scheme)))
+    Ok(initial_color_scheme.chain(stream::race(color_scheme_signals, requested_color_scheme)))
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
-    let logcontrol = setup_logging();
-    let connection = zbus::connection::Builder::session()?
-        .serve_log_control(logcontrol_zbus::LogControl1::new(logcontrol))?
-        .replace_existing_names(false)
-        .allow_name_replacements(false)
-        .name("de.swsnr.helix-dark-mode")?
-        .build()
-        .await?;
-
-    info!("Connected to bus");
-    let settings = SettingsProxy::builder(&connection)
-        .cache_properties(proxy::CacheProperties::No)
-        .build()
-        .await?;
-
-    // Establish communication channels between different tasks
-    let (color_scheme_tx, color_scheme_rx) = mpsc::channel(5);
-    let (reload_helix_tx, reload_helix_rx) = watch::channel(Span::current());
-
-    // Spawn auxilliary tasks to update the helix theme and reload helix processes
-    info!("Starting to update the helix theme according to the current color scheme");
-    let mut update_theme_task = tokio::spawn(update_helix_theme_for_color_schemes(
-        color_scheme_rx,
-        reload_helix_tx,
-    ));
-    let mut reload_helix_task = tokio::spawn(reload_helix(reload_helix_rx));
-
-    let (color_scheme, abort_handle) =
-        stream::abortable(receive_color_scheme_changes(settings).await?);
-
-    info!("Starting to watch for changes to the desktop color scheme");
-    let mut color_scheme_task = tokio::spawn(
-        color_scheme
-            .enumerate()
-            .map(|(n, r)| r.map(|(span, scheme)| (n, span, scheme)))
-            .try_for_each(move |(n, span, color_scheme)| {
-                let span = info_span!(parent: &span, "color-scheme-update", n = n, color_scheme = ?color_scheme)
-                    .entered();
-                info!(
-                    n,
-                    ?color_scheme,
-                    "Color scheme changed {n}th time, to {color_scheme:?}",
-                );
-                let span = span.exit();
-                let color_scheme_tx = color_scheme_tx.clone();
-                async move {
-                    color_scheme_tx
-                        .send((color_scheme, span))
-                        .await
-                        .with_context(|| "Color theme channel closed unexpectedly")
-                }
-            }),
-    );
-    let mut termination_signals = stream::select(
-        SignalStream::new(signal(SignalKind::interrupt())?).inspect(|()| info!("Received SIGINT")),
-        SignalStream::new(signal(SignalKind::terminate())?).inspect(|()| info!("Received SIGTERM")),
-    );
-    tokio::select! {
-        () = termination_signals.select_next_some() => {
-            info!("Asked to terminate, aborting settings monitor");
-            // Abort the color schemes stream.
-            abort_handle.abort();
-        }
-        // Fail if any task panic
-        result = &mut color_scheme_task => {
-            result??;
-        },
-        result = &mut update_theme_task => {
-            result?;
-        },
-        result = &mut reload_helix_task => {
-            result?;
-        },
+async fn tick_connection(connection: zbus::Connection) {
+    loop {
+        connection.executor().tick().await;
     }
+}
 
-    info!("Disconnecting from bus");
-    connection.graceful_shutdown().await;
+fn main() -> anyhow::Result<()> {
+    let logcontrol = setup_logging();
+    let executor = LocalExecutor::new().leak();
 
-    // Wait until we no longer listen for color scheme changes
-    color_scheme_task.await??;
-    // Then wait until all auxilliary tasks have completed, with their inbound
-    // channels being closed
-    update_theme_task.await?;
-    reload_helix_task.await?;
+    let main_task = executor.spawn(async move {
+        let terminate = Signals::new([async_signal::Signal::Term, async_signal::Signal::Int])
+            .with_context(|| "Failed to setup Unix signals")?
+            .filter_map(|signal| {
+                signal
+                    .inspect_err(|error| {
+                        warn!("Signal failed: {error}");
+                    })
+                    .ok()
+            })
+            .inspect(|signal| {
+                info!("Received termination signal {signal:?}, terminating");
+            })
+            .take(1);
 
-    Ok(())
+        let connection = zbus::connection::Builder::session()?
+            .internal_executor(false)
+            .serve_log_control(logcontrol_zbus::LogControl1::new(logcontrol))?
+            .replace_existing_names(false)
+            .allow_name_replacements(false)
+            .name("de.swsnr.helix-dark-mode")?
+            .build()
+            .await?;
+        executor.spawn(tick_connection(connection.clone())).detach();
+
+        info!("Connected to bus");
+        let settings = SettingsProxy::builder(&connection)
+            .cache_properties(proxy::CacheProperties::No)
+            .build()
+            .await?;
+
+        // Establish communication channels between different tasks
+        let (color_scheme_tx, color_scheme_rx) = async_channel::bounded(5);
+        let (reload_helix_tx, reload_helix_rx) = async_channel::bounded(1);
+
+        // Spawn auxilliary tasks to update the helix theme and reload helix processes
+        info!("Starting to update the helix theme according to the current color scheme");
+        let update_theme_task = executor.spawn(update_helix_theme_for_color_schemes(
+            color_scheme_rx,
+            reload_helix_tx,
+        ));
+        let reload_helix_task = executor.spawn(reload_helix(reload_helix_rx));
+
+        info!("Starting to watch for changes to the desktop color scheme");
+        let color_scheme = stream::stop_after_future(
+            receive_color_scheme_changes(settings).await?,
+            terminate.last(),
+        );
+        let color_scheme_task = executor.spawn(
+            color_scheme
+                .enumerate()
+                .map(|(n, r)| r.map(|(span, scheme)| (n, span, scheme)))
+                .then(move |res| {
+                    let color_scheme_tx = color_scheme_tx.clone();
+                    async move {
+                        let (n, span, color_scheme) = res?;
+                        let n = n + 1; // enumerate starts a 0
+                        let span = info_span!(parent: &span,
+                            "color-scheme-update", n = n, color_scheme = ?color_scheme)
+                        .entered();
+                        info!(
+                            n,
+                            ?color_scheme,
+                            "Color scheme changed {n}th time, to {color_scheme:?}",
+                        );
+                        let span = span.exit();
+                        color_scheme_tx
+                            .send((color_scheme, span))
+                            .await
+                            .with_context(|| "Color theme channel closed unexpectedly")
+                    }
+                })
+                .take_while(Result::is_ok)
+                .last(),
+        );
+        color_scheme_task.await;
+
+        info!("Stopped listing for color scheme changes, waiting for pending tasks");
+
+        // Then wait until all auxilliary tasks have completed, with their inbound
+        // channels being closed
+        update_theme_task.await;
+        reload_helix_task.await;
+
+        info!("Good byte");
+        Ok(())
+    });
+
+    async_io::block_on(executor.run(main_task))
 }

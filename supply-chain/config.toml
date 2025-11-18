@@ -69,24 +69,12 @@ criteria = "safe-to-run"
 version = "2.7.6"
 criteria = "safe-to-run"
 
-[[exemptions.mio]]
-version = "1.1.0"
-criteria = "safe-to-run"
-
-[[exemptions.nu-ansi-term]]
-version = "0.50.3"
-criteria = "safe-to-run"
-
 [[exemptions.ordered-stream]]
 version = "0.2.0"
 criteria = "safe-to-run"
 
 [[exemptions.piper]]
 version = "0.2.4"
-criteria = "safe-to-run"
-
-[[exemptions.proc-macro2]]
-version = "1.0.103"
 criteria = "safe-to-run"
 
 [[exemptions.r-efi]]
@@ -99,10 +87,6 @@ criteria = "safe-to-run"
 
 [[exemptions.signal-hook-registry]]
 version = "1.4.6"
-criteria = "safe-to-run"
-
-[[exemptions.socket2]]
-version = "0.6.1"
 criteria = "safe-to-run"
 
 [[exemptions.toml_parser]]

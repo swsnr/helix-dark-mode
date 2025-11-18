@@ -197,25 +197,25 @@ end = "2026-07-23"
 
 [[trusted.tokio]]
 criteria = "safe-to-run"
-user-id = 6741 # Alice Ryhl (Darksonn)
+user-id = 6741
 start = "2020-12-25"
 end = "2026-07-23"
 
 [[trusted.tokio-macros]]
 criteria = "safe-to-run"
-user-id = 6741 # Alice Ryhl (Darksonn)
+user-id = 6741
 start = "2020-10-26"
 end = "2026-07-23"
 
 [[trusted.tokio-stream]]
 criteria = "safe-to-run"
-user-id = 6741 # Alice Ryhl (Darksonn)
+user-id = 6741
 start = "2021-01-04"
 end = "2026-07-23"
 
 [[trusted.tokio-util]]
 criteria = "safe-to-run"
-user-id = 6741 # Alice Ryhl (Darksonn)
+user-id = 6741
 start = "2021-01-12"
 end = "2026-07-23"
 
