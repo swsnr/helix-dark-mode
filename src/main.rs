@@ -532,9 +532,9 @@ async fn tick_connection(connection: zbus::Connection) {
 
 fn main() -> anyhow::Result<()> {
     let logcontrol = setup_logging();
-    let executor = LocalExecutor::new().leak();
+    let executor = LocalExecutor::new();
 
-    let main_task = executor.spawn(async move {
+    async_io::block_on(executor.run(async {
         let terminate = Signals::new([async_signal::Signal::Term, async_signal::Signal::Int])
             .with_context(|| "Failed to setup Unix signals")?
             .filter_map(|signal| {
@@ -582,37 +582,34 @@ fn main() -> anyhow::Result<()> {
             receive_color_scheme_changes(settings).await?,
             terminate.last(),
         );
-        let color_scheme_task = executor.spawn(
-            color_scheme
-                .enumerate()
-                .map(|(n, r)| r.map(|(span, scheme)| (n, span, scheme)))
-                .then(move |res| {
-                    let color_scheme_tx = color_scheme_tx.clone();
-                    async move {
-                        let (n, span, color_scheme) = res?;
-                        let n = n + 1; // enumerate starts a 0
-                        let span = info_span!(parent: &span,
+        color_scheme
+            .enumerate()
+            .map(|(n, r)| r.map(|(span, scheme)| (n, span, scheme)))
+            .then(move |res| {
+                let color_scheme_tx = color_scheme_tx.clone();
+                async move {
+                    let (n, span, color_scheme) = res?;
+                    let n = n + 1; // enumerate starts a 0
+                    let span = info_span!(parent: &span,
                             "color-scheme-update", n = n, color_scheme = ?color_scheme)
-                        .entered();
-                        info!(
-                            n,
-                            ?color_scheme,
-                            "Color scheme changed {n}th time, to {color_scheme:?}",
-                        );
-                        let span = span.exit();
-                        color_scheme_tx
-                            .send((color_scheme, span))
-                            .await
-                            .with_context(|| "Color theme channel closed unexpectedly")
-                    }
-                })
-                .take_while(Result::is_ok)
-                .last(),
-        );
-        color_scheme_task.await;
+                    .entered();
+                    info!(
+                        n,
+                        ?color_scheme,
+                        "Color scheme changed {n}th time, to {color_scheme:?}",
+                    );
+                    let span = span.exit();
+                    color_scheme_tx
+                        .send((color_scheme, span))
+                        .await
+                        .with_context(|| "Color theme channel closed unexpectedly")
+                }
+            })
+            .take_while(Result::is_ok)
+            .last()
+            .await;
 
         info!("Stopped listing for color scheme changes, waiting for pending tasks");
-
         // Then wait until all auxilliary tasks have completed, with their inbound
         // channels being closed
         update_theme_task.await;
@@ -620,7 +617,5 @@ fn main() -> anyhow::Result<()> {
 
         info!("Good byte");
         Ok(())
-    });
-
-    async_io::block_on(executor.run(main_task))
+    }))
 }
