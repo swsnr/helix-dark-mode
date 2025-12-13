@@ -615,7 +615,7 @@ fn main() -> anyhow::Result<()> {
         update_theme_task.await;
         reload_helix_task.await;
 
-        info!("Good byte");
+        info!("Good bye");
         Ok(())
     }))
 }
