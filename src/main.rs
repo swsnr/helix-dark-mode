@@ -475,20 +475,19 @@ async fn receive_color_scheme_changes(
         });
 
     // Explicitly refresh color scheme initially
-    // let initial_color_scheme = stream::once_future(get_color_scheme(settings.clone()))
-    //     .filter(|result| match result {
-    //         Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
-    //             warn!("xdg-portal-service not available");
-    //             false
-    //         }
-    //         _ => true,
-    //     })
-    //     .map(|result| {
-    //         result
-    //             .with_context(|| "Failed to get color-scheme")
-    //             .map(|color_scheme| (info_span!("initial-refresh"), color_scheme))
-    //     });
-    let initial_color_scheme = stream::empty();
+    let initial_color_scheme = stream::once_future(Box::pin(get_color_scheme(settings.clone())))
+        .filter(|result| match result {
+            Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
+                warn!("xdg-portal-service not available");
+                false
+            }
+            _ => true,
+        })
+        .map(|result| {
+            result
+                .with_context(|| "Failed to get color-scheme")
+                .map(|color_scheme| (info_span!("initial-refresh"), color_scheme))
+        });
 
     // Request the color scheme if the service name owner changed
     let portal_service_changed = settings
