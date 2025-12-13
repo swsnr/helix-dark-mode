@@ -559,7 +559,7 @@ fn main() -> anyhow::Result<()> {
             .name("de.swsnr.helix-dark-mode")?
             .build()
             .await?;
-        executor.spawn(tick_connection(connection.clone())).detach();
+        let connection_loop = executor.spawn(tick_connection(connection.clone()));
 
         info!("Connected to bus");
         let settings = SettingsProxy::builder(&connection)
@@ -608,6 +608,8 @@ fn main() -> anyhow::Result<()> {
             .await;
 
         info!("Stopped listing for color scheme changes, waiting for pending tasks");
+        connection_loop.cancel().await;
+
         // Then wait until all auxilliary tasks have completed, with their inbound
         // channels being closed
         update_theme_task.await;
