@@ -53,7 +53,7 @@ use rustix::{
     path::Arg,
     process::{Signal, getpid},
 };
-use tracing::{Instrument, Level, Span, debug, error, info, info_span, instrument, warn};
+use tracing::{Instrument, Level, Span, debug, error, info, info_span, instrument, trace, warn};
 use tracing_subscriber::{Registry, layer::SubscriberExt as _};
 use zbus::{
     proxy,
@@ -235,7 +235,7 @@ fn send_signal_to_matching_process(
                     format!("Failed to send {signal:?} to {:?}", dentry.file_name())
                 })?;
             } else {
-                debug!("Skipping {:?}, doesn't match {name}", dentry.file_name());
+                trace!("Skipping {:?}, doesn't match {name}", dentry.file_name());
             }
             Ok(())
         }
@@ -427,7 +427,7 @@ async fn update_helix_theme_for_color_schemes(
 /// logging actions in response to the new color scheme.
 async fn receive_color_scheme_changes(
     settings: SettingsProxy<'_>,
-) -> anyhow::Result<impl Stream<Item = anyhow::Result<(Span, ColorScheme)>>> {
+) -> anyhow::Result<impl Stream<Item = anyhow::Result<(Span, ColorScheme)>> + Unpin> {
     // Start listening for color scheme changes
     let color_scheme_signals = settings
         .receive_setting_changed_with_args(&[
@@ -475,19 +475,20 @@ async fn receive_color_scheme_changes(
         });
 
     // Explicitly refresh color scheme initially
-    let initial_color_scheme = stream::once_future(get_color_scheme(settings.clone()))
-        .filter(|result| match result {
-            Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
-                warn!("xdg-portal-service not available");
-                false
-            }
-            _ => true,
-        })
-        .map(|result| {
-            result
-                .with_context(|| "Failed to get color-scheme")
-                .map(|color_scheme| (info_span!("initial-refresh"), color_scheme))
-        });
+    // let initial_color_scheme = stream::once_future(get_color_scheme(settings.clone()))
+    //     .filter(|result| match result {
+    //         Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
+    //             warn!("xdg-portal-service not available");
+    //             false
+    //         }
+    //         _ => true,
+    //     })
+    //     .map(|result| {
+    //         result
+    //             .with_context(|| "Failed to get color-scheme")
+    //             .map(|color_scheme| (info_span!("initial-refresh"), color_scheme))
+    //     });
+    let initial_color_scheme = stream::empty();
 
     // Request the color scheme if the service name owner changed
     let portal_service_changed = settings
@@ -511,17 +512,19 @@ async fn receive_color_scheme_changes(
             span.exit()
         });
 
-    let requested_color_scheme = stream::race(portal_service_changed, explicit_color_scheme_change)
+    let requested_color_scheme = explicit_color_scheme_change
+        .or(portal_service_changed)
         .then(move |span| {
             let settings = settings.clone();
-            async move {
+            let f = async move {
                 let scheme = get_color_scheme(settings).await?;
                 Ok((Span::current(), scheme))
             }
-            .instrument(span)
+            .instrument(span);
+            Box::pin(f)
         });
 
-    Ok(initial_color_scheme.chain(stream::race(color_scheme_signals, requested_color_scheme)))
+    Ok(initial_color_scheme.chain(color_scheme_signals.or(requested_color_scheme)))
 }
 
 async fn tick_connection(connection: zbus::Connection) {
@@ -582,31 +585,27 @@ fn main() -> anyhow::Result<()> {
             receive_color_scheme_changes(settings).await?,
             terminate.last(),
         );
-        color_scheme
+        let color_scheme_result = color_scheme
             .enumerate()
-            .map(|(n, r)| r.map(|(span, scheme)| (n, span, scheme)))
-            .then(move |res| {
-                let color_scheme_tx = color_scheme_tx.clone();
-                async move {
-                    let (n, span, color_scheme) = res?;
-                    let n = n + 1; // enumerate starts a 0
-                    let span = info_span!(parent: &span,
-                            "color-scheme-update", n = n, color_scheme = ?color_scheme)
-                    .entered();
-                    info!(
-                        n,
-                        ?color_scheme,
-                        "Color scheme changed {n}th time, to {color_scheme:?}",
-                    );
-                    let span = span.exit();
-                    color_scheme_tx
-                        .send((color_scheme, span))
-                        .await
-                        .with_context(|| "Color theme channel closed unexpectedly")
-                }
+            .try_for_each(move |(n, res)| {
+                let n = n + 1;
+                let (span, color_scheme) = res?;
+                let span = info_span!(
+                    parent: &span, "color-scheme-update",
+                 n = n, color_scheme = ?color_scheme
+                )
+                .entered();
+                info!(
+                    n,
+                    ?color_scheme,
+                    "Color scheme changed {n}th time, to {color_scheme:?}",
+                );
+                let span = span.exit();
+                color_scheme_tx
+                    .force_send((color_scheme, span))
+                    .with_context(|| "Color theme channel closed unexpectedly")?;
+                Ok(())
             })
-            .take_while(Result::is_ok)
-            .last()
             .await;
 
         info!("Stopped listing for color scheme changes, waiting for pending tasks");
@@ -616,6 +615,6 @@ fn main() -> anyhow::Result<()> {
         reload_helix_task.await;
 
         info!("Good bye");
-        Ok(())
+        color_scheme_result
     }))
 }
