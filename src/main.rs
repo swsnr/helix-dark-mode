@@ -33,9 +33,9 @@
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufReader, ErrorKind, Read};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, AsRawFd as _};
 use std::os::unix::ffi::OsStrExt;
-use std::os::{fd::BorrowedFd, unix::fs::symlink};
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use anyhow::Context;
@@ -45,13 +45,12 @@ use async_signal::Signals;
 use futures_lite::{Stream, StreamExt as _, stream};
 use logcontrol_tracing::{PrettyLogControl1LayerFactory, TracingLogControl1};
 use logcontrol_zbus::{ConnectionBuilderExt as _, logcontrol::LogControl1};
-use rustix::fs::{DirEntry, readlinkat};
+use rustix::fs::readlinkat;
 use rustix::io::Errno;
 use rustix::process::pidfd_send_signal;
 use rustix::{
     fs::{Dir, FileType, Mode, OFlags, openat},
-    path::Arg,
-    process::{Signal, getpid},
+    process::Signal,
 };
 use tracing::{Instrument, Level, Span, debug, error, info, info_span, instrument, trace, warn};
 use tracing_subscriber::{Registry, layer::SubscriberExt as _};
@@ -167,8 +166,8 @@ async fn get_color_scheme(settings: SettingsProxy<'_>) -> zbus::fdo::Result<Colo
 /// # Errors
 ///
 /// Fail if reading the `exe` symlink or the `cmdline` file fail.
-fn process_matches_name(pid_fd: BorrowedFd, name: &str) -> anyhow::Result<bool> {
-    let exe_target = readlinkat(pid_fd, "exe", Vec::new())
+fn process_matches_name<F: AsFd>(pid_fd: F, name: &str) -> anyhow::Result<bool> {
+    let exe_target = readlinkat(&pid_fd, "exe", Vec::new())
         .with_context(|| "Failed to read exe symlink target")?;
     if Path::new(OsStr::from_bytes(exe_target.as_bytes()))
         .file_name()
@@ -200,42 +199,35 @@ fn process_matches_name(pid_fd: BorrowedFd, name: &str) -> anyhow::Result<bool> 
 
 /// Send a signal to a matching process.
 ///
-/// `proc_fd` is a dir fd for `/proc`, and `dentry` the directory entry within
-/// `/proc` to check.
+/// `pid_fd` is a file descriptor to a process.
 ///
-/// Match the process referred to by `dentry` against `name` using
+/// Match the process referred to by `pid_fd` against `name` using
 /// [`process_matches_name`], and if it matches, send the given `signal` to
 /// the process.
-///
-/// Carefully use PID FDs to make sure that there are no race conditions.
-#[instrument(skip_all, fields(pid = ?dentry.file_name(), name, ?signal))]
-fn send_signal_to_matching_process(
-    proc_fd: BorrowedFd,
-    dentry: &DirEntry,
+#[instrument(skip_all, fields(name, ?signal))]
+fn send_signal_to_matching_process<F: AsFd>(
+    pid_fd: F,
     name: &str,
     signal: Signal,
 ) -> anyhow::Result<()> {
-    let pid_fd = openat(
-        proc_fd,
-        dentry.file_name(),
-        OFlags::DIRECTORY | OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::empty(),
-    )
-    .with_context(|| {
-        format!(
-            "Failed to open subdirectory {:?} of /proc",
-            dentry.file_name()
-        )
-    })?;
-    match process_matches_name(pid_fd.as_fd(), name) {
+    match process_matches_name(&pid_fd, name) {
         Ok(matches) => {
             if matches {
-                info!("Sending {signal:?} to {:?}", dentry.file_name());
-                pidfd_send_signal(pid_fd, signal).with_context(|| {
-                    format!("Failed to send {signal:?} to {:?}", dentry.file_name())
+                info!(
+                    "Sending {signal:?} to PID fd {}",
+                    pid_fd.as_fd().as_raw_fd()
+                );
+                pidfd_send_signal(&pid_fd, signal).with_context(|| {
+                    format!(
+                        "Failed to send {signal:?} to PID fd {}",
+                        pid_fd.as_fd().as_raw_fd()
+                    )
                 })?;
             } else {
-                trace!("Skipping {:?}, doesn't match {name}", dentry.file_name());
+                trace!(
+                    "Skipping PID fd {}, doesn't match {name}",
+                    pid_fd.as_fd().as_raw_fd()
+                );
             }
             Ok(())
         }
@@ -246,7 +238,10 @@ fn send_signal_to_matching_process(
             }) {
                 return Ok(());
             }
-            Err(error.context(format!("Failed to check name of {:?}", dentry.file_name())))
+            Err(error.context(format!(
+                "Failed to check name of PID fd {:?}",
+                pid_fd.as_fd().as_raw_fd()
+            )))
         }
     }
 }
@@ -259,40 +254,51 @@ fn send_signal_to_matching_process(
 ///
 /// Carefully use directory FDs and PID FDs to make sure that there are no race conditions.
 fn send_signal_to_matching_processes(name: &str, signal: Signal) -> anyhow::Result<()> {
+    let this_pid = rustix::process::getpid().to_string();
     let proc_fd = rustix::fs::open(
         "/proc",
         OFlags::DIRECTORY | OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::empty(),
     )
     .with_context(|| "Failed to open /proc")?;
-    let pid_self = getpid().as_raw_nonzero().to_string();
-    for dentry_res in Dir::read_from(&proc_fd).with_context(|| "Failed to read /proc")? {
-        let dentry = match dentry_res {
-            Ok(dentry) => dentry,
-            Err(err) => {
-                warn!("Skipping failed dentry in /proc: {err}");
-                continue;
-            }
-        };
-        let span = info_span!("process", pid = ?dentry.file_name());
+    let processes = Dir::read_from(&proc_fd)
+        .with_context(|| "Failed to read /proc")?
+        .filter_map(|entry| {
+            entry
+                .inspect_err(|error| {
+                    warn!("Skipping failed dentry in /proc: {error}");
+                })
+                .ok()
+        })
+        // Skip over this process
+        .filter(|dentry| dentry.file_name().to_bytes() != this_pid.as_bytes())
+        // Skip over hidden entries
+        .filter(|dentry| !dentry.file_name().to_bytes().starts_with(b"."))
+        // Only look at directories
+        .filter(|dentry| dentry.file_type() == FileType::Directory)
+        .filter_map(|dentry| {
+            openat(
+                &proc_fd,
+                dentry.file_name(),
+                OFlags::DIRECTORY | OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                Mode::empty(),
+            )
+            .inspect_err(|error| {
+                warn!(
+                    "Failed to open {:?} in /proc, skipping: {error}",
+                    dentry.file_name()
+                );
+            })
+            .map(|pidfd| (dentry, pidfd))
+            .ok()
+        });
+    for (process_entry, process) in processes {
+        let span =
+            info_span!("process", pid = ?process_entry.file_name(), pid_fd = ?process.as_raw_fd());
         let _guard = span.enter();
 
-        if dentry.file_type() != FileType::Directory {
-            continue;
-        }
-        if dentry.file_name().to_bytes() == b".." || dentry.file_name().to_bytes() == b"." {
-            continue;
-        }
-        if dentry.file_name().as_str().unwrap_or_default() == pid_self {
-            // Skip over our own process
-            continue;
-        }
-        if let Err(error) = send_signal_to_matching_process(proc_fd.as_fd(), &dentry, name, signal)
-        {
-            warn!(
-                "Skipping over {}, failed: {error:#}",
-                dentry.file_name().to_string_lossy()
-            );
+        if let Err(error) = send_signal_to_matching_process(&process, name, signal) {
+            warn!("Process {:?} failed: {error:#}", process_entry.file_name());
         }
     }
     Ok(())
